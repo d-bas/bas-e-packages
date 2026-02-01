@@ -3,10 +3,19 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 export type SerializedString = string;
+export type ReplacerCallback = (nextValue: unknown) => void;
+export type Replacer = (value: unknown, replace: ReplacerCallback) => void;
+export type Reviver = (value: unknown) => unknown;
+export type StringifyOptions = {
+  replacer?: Replacer;
+};
+export type ParseOptions = {
+  reviver?: Reviver;
+};
 
 type NativeModule = {
-  stringify: (value: unknown) => string;
-  parse: (text: string) => unknown;
+  stringify: (value: unknown, options?: StringifyOptions) => string;
+  parse: (text: string, options?: ParseOptions) => unknown;
   debugType: (value: unknown) => Record<string, unknown>;
 };
 
@@ -32,12 +41,12 @@ function loadNative(): NativeModule {
   }
 }
 
-export function stringify(value: unknown): SerializedString {
-  return loadNative().stringify(value);
+export function stringify(value: unknown, options?: StringifyOptions): SerializedString {
+  return loadNative().stringify(value, options);
 }
 
-export function parse(text: SerializedString): unknown {
-  return loadNative().parse(text);
+export function parse(text: SerializedString, options?: ParseOptions): unknown {
+  return loadNative().parse(text, options);
 }
 
 export function debugType(value: unknown): Record<string, unknown> {

@@ -163,4 +163,42 @@ describe('serialization', () => {
     expect(outSymbol).toBeDefined();
     expect((output.err as any)[outSymbol!]).toBe('sym-value');
   });
+
+  it('supports replacer callback', () => {
+    const input = { a: 1, b: 2, c: 'keep' };
+    const seen: number[] = [];
+
+    const output = parse(
+      stringify(input, {
+        replacer(value, replace) {
+          if (typeof value === 'number') {
+            seen.push(value);
+            if (value === 2) {
+              replace(undefined);
+            }
+          }
+        },
+      })
+    ) as typeof input;
+
+    expect(seen.sort()).toEqual([1, 2]);
+    expect(output.a).toBe(1);
+    expect(output.b).toBeUndefined();
+    expect(output.c).toBe('keep');
+  });
+
+  it('supports reviver callback on parse', () => {
+    const input = { a: 1, b: 2 };
+    const output = parse(stringify(input), {
+      reviver(value) {
+        if (value === 2) {
+          return 20;
+        }
+        return value;
+      },
+    }) as typeof input;
+
+    expect(output.a).toBe(1);
+    expect(output.b).toBe(20);
+  });
 });

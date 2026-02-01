@@ -32,6 +32,33 @@ const encoded = stringify(value);
 const decoded = parse(encoded);
 ```
 
+## Replacer
+
+```ts
+const encoded = stringify(value, {
+  replacer(current, replace) {
+    if (typeof current === 'number' && current === 42) {
+      replace(undefined);
+    }
+  },
+});
+```
+
+The replacer is called for every entity before serialization. Call `replace(newValue)`
+to override the current value (including `undefined`). If you don't call `replace`, the
+original value is used.
+
+## Reviver
+
+```ts
+const decoded = parse(encoded, {
+  reviver(value) {
+    if (value === 2) return 20;
+    return value;
+  },
+});
+```
+
 ## Notes
 - Objects that contain the key "$$type" may conflict with the internal wrapper format.
 - Functions and Symbols are not supported.

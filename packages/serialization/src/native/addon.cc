@@ -46,6 +46,18 @@ struct Ctors {
   Napi::Function regexpCtor;
   Napi::Function bigintCtor;
 };
+struct Replacer {
+  bool enabled = false;
+  Napi::Function fn;
+};
+struct ReplaceState {
+  bool replaced = false;
+  napi_value value = nullptr;
+};
+struct Reviver {
+  bool enabled = false;
+  Napi::Function fn;
+};
 using SeenStack = std::vector<Napi::Reference<Napi::Value>>;
 struct SeenGuard {
   SeenStack &seen;
@@ -168,6 +180,12 @@ std::string GetNapiErrorMessage(napi_env env) {
   }
   return "unknown napi error";
 }
+Napi::Value ReplaceCallback(const Napi::CallbackInfo &info) {
+  auto *state = static_cast<ReplaceState *>(info.Data());
+  state->replaced = true;
+  state->value = info.Length() > 0 ? info[0] : info.Env().Undefined();
+  return info.Env().Undefined();
+}
 bool SeenContains(const SeenStack &seen, const Napi::Value &value) {
   for (const auto &ref : seen) {
     if (value.StrictEquals(ref.Value())) {
@@ -232,7 +250,18 @@ size_t TypedArrayBytesPerElement(napi_typedarray_type type) {
   }
 }
 Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
-                        SeenStack &seen) {
+                        SeenStack &seen, const Replacer &replacer,
+                        bool applyReplacer) {
+  if (applyReplacer && replacer.enabled) {
+    ReplaceState state;
+    Napi::Function cb =
+        Napi::Function::New(env, ReplaceCallback, "replace", &state);
+    replacer.fn.Call(env.Global(), {value, cb});
+    if (state.replaced) {
+      Napi::Value nextValue = Napi::Value(env, state.value);
+      return EncodeValue(env, nextValue, seen, replacer, false);
+    }
+  }
   if (value.IsUndefined()) {
     return MakeWrapper(env, kTypeUndefined);
   }
@@ -275,7 +304,7 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
     Napi::Array out = Napi::Array::New(env, length);
     for (uint32_t i = 0; i < length; i++) {
       if (arr.Has(i)) {
-        out.Set(i, EncodeValue(env, arr.Get(i), seen));
+        out.Set(i, EncodeValue(env, arr.Get(i), seen, replacer, true));
       } else {
         out.Set(i, MakeWrapper(env, kTypeHole));
       }
@@ -388,7 +417,8 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
       }
       Napi::Array pair = Napi::Array::New(env, 2);
       pair.Set(static_cast<uint32_t>(0), MakePropKeyString(env, key));
-      pair.Set(static_cast<uint32_t>(1), EncodeValue(env, obj.Get(key), seen));
+      pair.Set(static_cast<uint32_t>(1),
+               EncodeValue(env, obj.Get(key), seen, replacer, true));
       props.Set(idx++, pair);
     }
     Napi::Object global = env.Global();
@@ -415,7 +445,8 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
       Napi::Array pair = Napi::Array::New(env, 2);
       pair.Set(static_cast<uint32_t>(0),
                MakePropKeySymbol(env, isGlobal, isGlobal ? keyFor : descVal));
-      pair.Set(static_cast<uint32_t>(1), EncodeValue(env, obj.Get(sym), seen));
+      pair.Set(static_cast<uint32_t>(1),
+               EncodeValue(env, obj.Get(sym), seen, replacer, true));
       props.Set(idx++, pair);
     }
     payload.Set(kPropsKey, props);
@@ -432,7 +463,7 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
       bool done = next.Get("done").ToBoolean().Value();
       if (done) break;
       Napi::Value v = next.Get("value");
-      arr.Set(idx++, EncodeValue(env, v, seen));
+      arr.Set(idx++, EncodeValue(env, v, seen, replacer, true));
     }
     return MakeWrapper(env, kTypeSet, arr);
   }
@@ -449,9 +480,11 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
       Napi::Array entry = next.Get("value").As<Napi::Array>();
       Napi::Array pair = Napi::Array::New(env, 2);
       pair.Set(static_cast<uint32_t>(0),
-               EncodeValue(env, entry.Get(static_cast<uint32_t>(0)), seen));
+               EncodeValue(env, entry.Get(static_cast<uint32_t>(0)), seen,
+                          replacer, true));
       pair.Set(static_cast<uint32_t>(1),
-               EncodeValue(env, entry.Get(static_cast<uint32_t>(1)), seen));
+               EncodeValue(env, entry.Get(static_cast<uint32_t>(1)), seen,
+                          replacer, true));
       arr.Set(idx++, pair);
     }
     return MakeWrapper(env, kTypeMap, arr);
@@ -465,7 +498,7 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
       throw Napi::TypeError::New(env, "Only string keys are supported");
     }
     std::string keyStr = key.As<Napi::String>().Utf8Value();
-    out.Set(keyStr, EncodeValue(env, obj.Get(key), seen));
+    out.Set(keyStr, EncodeValue(env, obj.Get(key), seen, replacer, true));
   }
   return out;
 }
@@ -486,9 +519,11 @@ bool IsKnownWrapperType(const std::string &t) {
          t == kTypeTypedArray || t == kTypeDataView;
 }
 Napi::Value DecodeValue(const Napi::Env &env, const Napi::Value &value,
-                        const Ctors &ctors);
+                        const Ctors &ctors, const Reviver &reviver,
+                        bool applyReviver);
 Napi::Value DecodeWrapper(const Napi::Env &env, const Napi::Object &obj,
-                          const Ctors &ctors) {
+                          const Ctors &ctors, const Reviver &reviver,
+                          bool applyReviver) {
   Napi::Value typeVal = obj.Get(kTypeKey);
   if (!typeVal.IsString()) return obj;
   std::string t = typeVal.As<Napi::String>().Utf8Value();
@@ -572,8 +607,10 @@ Napi::Value DecodeWrapper(const Napi::Env &env, const Napi::Object &obj,
         if (pair.Length() < 2) {
           continue;
         }
-        Napi::Value keyVal = DecodeValue(env, pair.Get(static_cast<uint32_t>(0)), ctors);
-        Napi::Value val = DecodeValue(env, pair.Get(static_cast<uint32_t>(1)), ctors);
+        Napi::Value keyVal =
+            DecodeValue(env, pair.Get(static_cast<uint32_t>(0)), ctors, reviver, true);
+        Napi::Value val =
+            DecodeValue(env, pair.Get(static_cast<uint32_t>(1)), ctors, reviver, true);
         if (keyVal.IsString() || keyVal.IsSymbol()) {
           errObj.Set(keyVal, val);
         }
@@ -587,7 +624,7 @@ Napi::Value DecodeWrapper(const Napi::Env &env, const Napi::Object &obj,
     Napi::Function addFn = setObj.Get("add").As<Napi::Function>();
     uint32_t length = arr.Length();
     for (uint32_t i = 0; i < length; i++) {
-      Napi::Value decoded = DecodeValue(env, arr.Get(i), ctors);
+      Napi::Value decoded = DecodeValue(env, arr.Get(i), ctors, reviver, true);
       addFn.Call(setObj, {decoded});
     }
     return setObj;
@@ -599,8 +636,10 @@ Napi::Value DecodeWrapper(const Napi::Env &env, const Napi::Object &obj,
     uint32_t length = arr.Length();
     for (uint32_t i = 0; i < length; i++) {
       Napi::Array entry = arr.Get(i).As<Napi::Array>();
-      Napi::Value key = DecodeValue(env, entry.Get(static_cast<uint32_t>(0)), ctors);
-      Napi::Value val = DecodeValue(env, entry.Get(static_cast<uint32_t>(1)), ctors);
+      Napi::Value key =
+          DecodeValue(env, entry.Get(static_cast<uint32_t>(0)), ctors, reviver, true);
+      Napi::Value val =
+          DecodeValue(env, entry.Get(static_cast<uint32_t>(1)), ctors, reviver, true);
       setFn.Call(mapObj, {key, val});
     }
     return mapObj;
@@ -656,7 +695,8 @@ Napi::Value DecodeWrapper(const Napi::Env &env, const Napi::Object &obj,
   return obj;
 }
 Napi::Value DecodeArray(const Napi::Env &env, const Napi::Array &arr,
-                        const Ctors &ctors) {
+                        const Ctors &ctors, const Reviver &reviver,
+                        bool applyReviver) {
   uint32_t length = arr.Length();
   Napi::Array out = Napi::Array::New(env, length);
   for (uint32_t i = 0; i < length; i++) {
@@ -665,12 +705,13 @@ Napi::Value DecodeArray(const Napi::Env &env, const Napi::Array &arr,
     if (IsWrapperType(env, item, kTypeHole)) {
       continue;
     }
-    out.Set(i, DecodeValue(env, item, ctors));
+    out.Set(i, DecodeValue(env, item, ctors, reviver, true));
   }
   return out;
 }
 Napi::Value DecodeObject(const Napi::Env &env, const Napi::Object &obj,
-                         const Ctors &ctors) {
+                         const Ctors &ctors, const Reviver &reviver,
+                         bool applyReviver) {
   Napi::Array keys = obj.GetPropertyNames();
   uint32_t length = keys.Length();
   Napi::Object out = Napi::Object::New(env);
@@ -681,14 +722,19 @@ Napi::Value DecodeObject(const Napi::Env &env, const Napi::Object &obj,
     }
     std::string keyStr = key.As<Napi::String>().Utf8Value();
     Napi::Value val = obj.Get(key);
-    out.Set(keyStr, DecodeValue(env, val, ctors));
+    out.Set(keyStr, DecodeValue(env, val, ctors, reviver, true));
   }
   return out;
 }
 Napi::Value DecodeValue(const Napi::Env &env, const Napi::Value &value,
-                        const Ctors &ctors) {
+                        const Ctors &ctors, const Reviver &reviver,
+                        bool applyReviver) {
+  if (applyReviver && reviver.enabled) {
+    Napi::Value nextValue = reviver.fn.Call(env.Global(), {value});
+    return DecodeValue(env, nextValue, ctors, reviver, false);
+  }
   if (value.IsArray()) {
-    return DecodeArray(env, value.As<Napi::Array>(), ctors);
+    return DecodeArray(env, value.As<Napi::Array>(), ctors, reviver, true);
   }
   if (value.IsObject()) {
     Napi::Object obj = value.As<Napi::Object>();
@@ -697,11 +743,11 @@ Napi::Value DecodeValue(const Napi::Env &env, const Napi::Value &value,
       if (typeVal.IsString()) {
         std::string t = typeVal.As<Napi::String>().Utf8Value();
         if (IsKnownWrapperType(t)) {
-          return DecodeWrapper(env, obj, ctors);
+          return DecodeWrapper(env, obj, ctors, reviver, true);
         }
       }
     }
-    return DecodeObject(env, obj, ctors);
+    return DecodeObject(env, obj, ctors, reviver, true);
   }
   return value;
 }
@@ -710,8 +756,22 @@ Napi::Value NativeStringify(const Napi::CallbackInfo &info) {
   if (info.Length() < 1) {
     throw Napi::TypeError::New(env, "Expected a value to stringify");
   }
+  Replacer replacer;
+  if (info.Length() >= 2 && info[1].IsObject()) {
+    Napi::Object options = info[1].As<Napi::Object>();
+    if (options.Has("replacer")) {
+      Napi::Value replVal = options.Get("replacer");
+      if (!replVal.IsUndefined() && !replVal.IsNull()) {
+        if (!replVal.IsFunction()) {
+          throw Napi::TypeError::New(env, "replacer must be a function");
+        }
+        replacer.enabled = true;
+        replacer.fn = replVal.As<Napi::Function>();
+      }
+    }
+  }
   SeenStack seen;
-  Napi::Value encoded = EncodeValue(env, info[0], seen);
+  Napi::Value encoded = EncodeValue(env, info[0], seen, replacer, true);
   Napi::Object json = env.Global().Get("JSON").As<Napi::Object>();
   Napi::Function stringify = json.Get("stringify").As<Napi::Function>();
   return stringify.Call(json, {encoded});
@@ -731,7 +791,21 @@ Napi::Value NativeParse(const Napi::CallbackInfo &info) {
       env.Global().Get("RegExp").As<Napi::Function>(),
       env.Global().Get("BigInt").As<Napi::Function>(),
   };
-  return DecodeValue(env, parsed, ctors);
+  Reviver reviver;
+  if (info.Length() >= 2 && info[1].IsObject()) {
+    Napi::Object options = info[1].As<Napi::Object>();
+    if (options.Has("reviver")) {
+      Napi::Value revVal = options.Get("reviver");
+      if (!revVal.IsUndefined() && !revVal.IsNull()) {
+        if (!revVal.IsFunction()) {
+          throw Napi::TypeError::New(env, "reviver must be a function");
+        }
+        reviver.enabled = true;
+        reviver.fn = revVal.As<Napi::Function>();
+      }
+    }
+  }
+  return DecodeValue(env, parsed, ctors, reviver, true);
 }
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("stringify", Napi::Function::New(env, NativeStringify));
