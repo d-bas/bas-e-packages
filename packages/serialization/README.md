@@ -48,6 +48,20 @@ The replacer is called for every entity before serialization. Call `replace(newV
 to override the current value (including `undefined`). If you don't call `replace`, the
 original value is used.
 
+## Circular references
+
+```ts
+const obj: any = { name: 'root' };
+obj.self = obj;
+
+const encoded = stringify(obj, { circularReferences: true });
+const decoded = parse(encoded);
+```
+
+When `circularReferences` is enabled, every object/array is wrapped with `$$type`
+and `$$id`, and circular references are stored as
+`{ "$$type": "reference", "$$id": <id> }`.
+
 ## Reviver
 
 ```ts

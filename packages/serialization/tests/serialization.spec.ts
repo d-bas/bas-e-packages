@@ -136,6 +136,16 @@ describe('serialization', () => {
     expect(() => stringify(obj)).toThrow(TypeError);
   });
 
+  it('supports circular references when enabled', () => {
+    const obj: any = { name: 'root' };
+    obj.self = obj;
+
+    const output = parse(stringify(obj, { circularReferences: true })) as any;
+
+    expect(output.name).toBe('root');
+    expect(output.self).toBe(output);
+  });
+
   it('throws on unsupported values', () => {
     expect(() => stringify(() => {})).toThrow(TypeError);
     expect(() => stringify(Symbol('x'))).toThrow(TypeError);

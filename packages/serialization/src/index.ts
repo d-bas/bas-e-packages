@@ -8,6 +8,7 @@ export type Replacer = (value: unknown, replace: ReplacerCallback) => void;
 export type Reviver = (value: unknown) => unknown;
 export type StringifyOptions = {
   replacer?: Replacer;
+  circularReferences?: boolean;
 };
 export type ParseOptions = {
   reviver?: Reviver;
