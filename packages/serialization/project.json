@@ -1,0 +1,22 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "serialization",
+  "projectType": "library",
+  "sourceRoot": "packages/serialization/src",
+  "targets": {
+    "test": {
+      "executor": "@nx/vitest:test",
+      "options": {
+        "configFile": "packages/serialization/vite.config.ts",
+        "passWithNoTests": false
+      }
+    },
+    "build-native": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx node-gyp rebuild",
+        "cwd": "packages/serialization"
+      }
+    }
+  }
+}

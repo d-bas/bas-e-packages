@@ -514,8 +514,8 @@
     "cache": "/Users/dbas/.npm",
     "node_gyp": "/Users/dbas/.nvm/versions/node/v24.13.0/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js",
     "npm_version": "11.6.2",
-    "userconfig": "/Users/dbas/.npmrc",
     "init_module": "/Users/dbas/.npm-init.js",
+    "userconfig": "/Users/dbas/.npmrc",
     "globalconfig": "/Users/dbas/.nvm/versions/node/v24.13.0/etc/npmrc",
     "local_prefix": "/Users/dbas/WebstormProjects/bas-utils",
     "global_prefix": "/Users/dbas/.nvm/versions/node/v24.13.0"

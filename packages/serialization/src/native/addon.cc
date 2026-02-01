@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
-#include <unordered_set>
 #include <vector>
 namespace {
 const char kTypeKey[] = "$$type";
@@ -37,7 +36,21 @@ struct Ctors {
   Napi::Function regexpCtor;
   Napi::Function bigintCtor;
 };
-using SeenSet = std::unordered_set<void *>;
+using SeenStack = std::vector<Napi::Reference<Napi::Value>>;
+struct SeenGuard {
+  SeenStack &seen;
+  bool active;
+  SeenGuard(SeenStack &stack, const Napi::Value &value) : seen(stack), active(true) {
+    seen.emplace_back(Napi::Persistent(value));
+  }
+  ~SeenGuard() {
+    if (active) {
+      seen.pop_back();
+    }
+  }
+  SeenGuard(const SeenGuard &) = delete;
+  SeenGuard &operator=(const SeenGuard &) = delete;
+};
 Napi::Object MakeWrapper(Napi::Env env, const char *type) {
   Napi::Object obj = Napi::Object::New(env);
   obj.Set(kTypeKey, Napi::String::New(env, type));
@@ -120,6 +133,14 @@ bool IsInstanceOf(const Napi::Env &env, const Napi::Object &obj,
   if (!ctorValue.IsFunction()) return false;
   return obj.InstanceOf(ctorValue.As<Napi::Function>());
 }
+bool SeenContains(const SeenStack &seen, const Napi::Value &value) {
+  for (const auto &ref : seen) {
+    if (value.StrictEquals(ref.Value())) {
+      return true;
+    }
+  }
+  return false;
+}
 std::string TypedArrayName(napi_typedarray_type type) {
   switch (type) {
     case napi_int8_array:
@@ -148,8 +169,29 @@ std::string TypedArrayName(napi_typedarray_type type) {
       return "";
   }
 }
+size_t TypedArrayBytesPerElement(napi_typedarray_type type) {
+  switch (type) {
+    case napi_int8_array:
+    case napi_uint8_array:
+    case napi_uint8_clamped_array:
+      return 1;
+    case napi_int16_array:
+    case napi_uint16_array:
+      return 2;
+    case napi_int32_array:
+    case napi_uint32_array:
+    case napi_float32_array:
+      return 4;
+    case napi_float64_array:
+    case napi_bigint64_array:
+    case napi_biguint64_array:
+      return 8;
+    default:
+      return 0;
+  }
+}
 Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
-                        SeenSet &seen) {
+                        SeenStack &seen) {
   if (value.IsUndefined()) {
     return MakeWrapper(env, kTypeUndefined);
   }
@@ -182,11 +224,10 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
     throw Napi::TypeError::New(env, "Unsupported value type");
   }
   Napi::Object obj = value.As<Napi::Object>();
-  void *ptr = reinterpret_cast<void *>(static_cast<napi_value>(value));
-  if (seen.find(ptr) != seen.end()) {
+  if (SeenContains(seen, value)) {
     throw Napi::TypeError::New(env, "Circular reference detected");
   }
-  seen.insert(ptr);
+  SeenGuard guard(seen, value);
   if (value.IsArray()) {
     Napi::Array arr = value.As<Napi::Array>();
     uint32_t length = arr.Length();
@@ -198,60 +239,69 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
         out.Set(i, MakeWrapper(env, kTypeHole));
       }
     }
-    seen.erase(ptr);
     return out;
   }
-  if (Napi::Buffer<uint8_t>::IsBuffer(value)) {
+  if (value.IsBuffer()) {
     Napi::Buffer<uint8_t> buf = value.As<Napi::Buffer<uint8_t>>();
     std::string b64 = Base64Encode(buf.Data(), buf.Length());
-    seen.erase(ptr);
     return MakeWrapper(env, kTypeBuffer, Napi::String::New(env, b64));
   }
   if (value.IsArrayBuffer()) {
     Napi::ArrayBuffer buf = value.As<Napi::ArrayBuffer>();
     std::string b64 = Base64Encode(static_cast<uint8_t *>(buf.Data()),
                                    buf.ByteLength());
-    seen.erase(ptr);
     return MakeWrapper(env, kTypeArrayBuffer, Napi::String::New(env, b64));
   }
   if (value.IsTypedArray()) {
-    Napi::TypedArray typed = value.As<Napi::TypedArray>();
-    Napi::ArrayBuffer buf = typed.ArrayBuffer();
-    size_t byteOffset = typed.ByteOffset();
-    size_t byteLength = typed.ByteLength();
-    std::string typeName = TypedArrayName(typed.TypedArrayType());
+    napi_typedarray_type type;
+    size_t length;
+    void *data;
+    napi_value arraybuffer;
+    size_t byteOffset;
+    napi_status status =
+        napi_get_typedarray_info(env, value, &type, &length, &data,
+                                 &arraybuffer, &byteOffset);
+    if (status != napi_ok) {
+      throw Napi::TypeError::New(env, "Invalid typed array");
+    }
+    std::string typeName = TypedArrayName(type);
+    size_t bytesPerElement = TypedArrayBytesPerElement(type);
     if (typeName.empty()) {
-      seen.erase(ptr);
       throw Napi::TypeError::New(env, "Unsupported typed array");
     }
-    uint8_t *data = static_cast<uint8_t *>(buf.Data()) + byteOffset;
-    std::string b64 = Base64Encode(data, byteLength);
+    if (bytesPerElement == 0) {
+      throw Napi::TypeError::New(env, "Unsupported typed array");
+    }
+    size_t byteLength = length * bytesPerElement;
+    std::string b64 = Base64Encode(static_cast<uint8_t *>(data), byteLength);
     Napi::Object wrapper = MakeWrapper(env, kTypeTypedArray);
     wrapper.Set(kArrayTypeKey, Napi::String::New(env, typeName));
     wrapper.Set(kValueKey, Napi::String::New(env, b64));
     wrapper.Set(kByteOffsetKey, Napi::Number::New(env, 0));
-    wrapper.Set(kLengthKey, Napi::Number::New(env, typed.ElementLength()));
-    seen.erase(ptr);
+    wrapper.Set(kLengthKey, Napi::Number::New(env, length));
     return wrapper;
   }
   if (value.IsDataView()) {
-    Napi::DataView view = value.As<Napi::DataView>();
-    Napi::ArrayBuffer buf = view.ArrayBuffer();
-    size_t byteOffset = view.ByteOffset();
-    size_t byteLength = view.ByteLength();
-    uint8_t *data = static_cast<uint8_t *>(buf.Data()) + byteOffset;
-    std::string b64 = Base64Encode(data, byteLength);
+    size_t byteLength;
+    void *data;
+    napi_value arraybuffer;
+    size_t byteOffset;
+    napi_status status =
+        napi_get_dataview_info(env, value, &byteLength, &data, &arraybuffer,
+                               &byteOffset);
+    if (status != napi_ok) {
+      throw Napi::TypeError::New(env, "Invalid DataView");
+    }
+    std::string b64 = Base64Encode(static_cast<uint8_t *>(data), byteLength);
     Napi::Object wrapper = MakeWrapper(env, kTypeDataView);
     wrapper.Set(kValueKey, Napi::String::New(env, b64));
     wrapper.Set(kByteOffsetKey, Napi::Number::New(env, 0));
     wrapper.Set(kLengthKey, Napi::Number::New(env, byteLength));
-    seen.erase(ptr);
     return wrapper;
   }
   if (IsInstanceOf(env, obj, "Date")) {
     Napi::Function toISOString = obj.Get("toISOString").As<Napi::Function>();
     Napi::Value iso = toISOString.Call(obj, {});
-    seen.erase(ptr);
     return MakeWrapper(env, kTypeDate, iso);
   }
   if (IsInstanceOf(env, obj, "RegExp")) {
@@ -260,7 +310,6 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
     Napi::Object payload = Napi::Object::New(env);
     payload.Set(kSourceKey, source);
     payload.Set(kFlagsKey, flags);
-    seen.erase(ptr);
     return MakeWrapper(env, kTypeRegExp, payload);
   }
   if (IsInstanceOf(env, obj, "Set")) {
@@ -276,7 +325,6 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
       Napi::Value v = next.Get("value");
       arr.Set(idx++, EncodeValue(env, v, seen));
     }
-    seen.erase(ptr);
     return MakeWrapper(env, kTypeSet, arr);
   }
   if (IsInstanceOf(env, obj, "Map")) {
@@ -291,11 +339,12 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
       if (done) break;
       Napi::Array entry = next.Get("value").As<Napi::Array>();
       Napi::Array pair = Napi::Array::New(env, 2);
-      pair.Set(0, EncodeValue(env, entry.Get(static_cast<uint32_t>(0)), seen));
-      pair.Set(1, EncodeValue(env, entry.Get(static_cast<uint32_t>(1)), seen));
+      pair.Set(static_cast<uint32_t>(0),
+               EncodeValue(env, entry.Get(static_cast<uint32_t>(0)), seen));
+      pair.Set(static_cast<uint32_t>(1),
+               EncodeValue(env, entry.Get(static_cast<uint32_t>(1)), seen));
       arr.Set(idx++, pair);
     }
-    seen.erase(ptr);
     return MakeWrapper(env, kTypeMap, arr);
   }
   Napi::Array keys = obj.GetPropertyNames();
@@ -309,7 +358,6 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
     std::string keyStr = key.As<Napi::String>().Utf8Value();
     out.Set(keyStr, EncodeValue(env, obj.Get(key), seen));
   }
-  seen.erase(ptr);
   return out;
 }
 bool IsWrapperType(const Napi::Env &env, const Napi::Value &value,
@@ -490,7 +538,7 @@ Napi::Value NativeStringify(const Napi::CallbackInfo &info) {
   if (info.Length() < 1) {
     throw Napi::TypeError::New(env, "Expected a value to stringify");
   }
-  SeenSet seen;
+  SeenStack seen;
   Napi::Value encoded = EncodeValue(env, info[0], seen);
   Napi::Object json = env.Global().Get("JSON").As<Napi::Object>();
   Napi::Function stringify = json.Get("stringify").As<Napi::Function>();

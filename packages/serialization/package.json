@@ -30,6 +30,9 @@
     "node-addon-api": "^7.1.0",
     "tslib": "^2.3.0"
   },
+  "devDependencies": {
+    "node-gyp":"12.2.0"
+  },
   "nx": {
     "tags": [
       "scope:shared"

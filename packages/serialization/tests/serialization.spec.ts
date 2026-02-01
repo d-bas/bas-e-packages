@@ -24,7 +24,6 @@ run('serialization', () => {
       undef: undefined,
       bigint: 123n,
     };
-
     const output = parse(stringify(input)) as typeof input;
 
     expect(output.str).toBe('hello');
