@@ -2,7 +2,12 @@
   "targets": [
     {
       "target_name": "bas_serde",
-      "sources": ["src/native/addon.cc"],
+      "sources": [
+        "src/native/addon.cc",
+        "src/native/encode.cc",
+        "src/native/decode.cc",
+        "src/native/serde_utils.cc"
+      ],
       "cflags_cc": ["-std=c++17", "-fexceptions"],
       "xcode_settings": {
         "GCC_ENABLE_CPP_EXCEPTIONS": "YES",

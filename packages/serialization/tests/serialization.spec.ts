@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stringify, parse, debugType } from '../src/index.js';
+import { stringify, parse } from '../src/index.js';
 
 function assertNativeAvailable(): void {
   if (process.env.SKIP_NATIVE === '1') {
@@ -92,22 +92,10 @@ describe('serialization', () => {
     const view = new DataView(viewBuffer);
     view.setUint8(0, 7);
     view.setUint8(1, 9);
-    let output: { typed: Uint16Array; view: DataView };
-    try {
-      output = parse(stringify({ typed, view })) as {
-        typed: Uint16Array;
-        view: DataView;
-      };
-    } catch (err) {
-      const typedInfo = debugType(typed);
-      const viewInfo = debugType(view);
-      const message = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `TypedArray/DataView stringify failed: ${message}\n` +
-          `typedInfo=${JSON.stringify(typedInfo)}\n` +
-          `viewInfo=${JSON.stringify(viewInfo)}`
-      );
-    }
+    const output = parse(stringify({ typed, view })) as {
+      typed: Uint16Array;
+      view: DataView;
+    };
 
     expect(output.typed instanceof Uint16Array).toBe(true);
     expect(Array.from(output.typed.values())).toEqual([500, 1000]);
