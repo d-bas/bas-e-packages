@@ -1,4 +1,4 @@
-# @org/async
+# @bas-e/async
 
 Async utility functions with retry logic and error handling for TypeScript applications.
 
@@ -28,7 +28,7 @@ This package provides powerful async utilities:
 ## 📝 Usage Examples
 
 ```typescript
-import { retry, createRetry, withRetry, TimeoutError } from '@org/async';
+import { retry, createRetry, withRetry, TimeoutError } from '@bas-e/async';
 
 // Basic retry with default options
 const result = await retry(async () => {
@@ -109,9 +109,9 @@ nx lint async     # Lint the package
 ## 🔒 Module Boundaries
 
 This package has the tag `scope:async` and can only import from:
-- `@org/utils` (tagged with `scope:shared`)
+- `@bas-e/utils` (tagged with `scope:shared`)
 
-Attempting to import from `@org/colors` or `@org/strings` will result in a linting error due to module boundary constraints.
+Attempting to import from `@bas-e/colors` or `@bas-e/strings` will result in a linting error due to module boundary constraints.
 
 ## 🔧 Self-Healing CI Demo
 

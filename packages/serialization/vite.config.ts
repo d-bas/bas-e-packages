@@ -2,14 +2,14 @@ import { defineConfig } from 'vite';
 
 export default defineConfig(() => ({
   root: __dirname,
-  cacheDir: '../../node_modules/.vite/packages/async',
+  cacheDir: '../../node_modules/.vite/packages/serialization',
   plugins: [],
   // Uncomment this if you are using workers.
   // worker: {
   //  plugins: [ nxViteTsPaths() ],
   // },
   test: {
-    name: '@bas-e/async',
+    name: '@bas-e/serialization',
     watch: false,
     globals: true,
     environment: 'node',

@@ -1,4 +1,4 @@
-# @org/strings
+# @bas-e/strings
 
 String manipulation utilities for TypeScript applications.
 
@@ -19,7 +19,7 @@ This package provides essential string manipulation utilities:
 ## 📝 Usage Examples
 
 ```typescript
-import { capitalize, slugify } from '@org/strings';
+import { capitalize, slugify } from '@bas-e/strings';
 
 // Capitalize strings
 capitalize('hello world');  // 'Hello world'
@@ -72,6 +72,6 @@ nx run strings:build-base  # Run custom build command
 ## 🔒 Module Boundaries
 
 This package has the tag `scope:strings` and can only import from:
-- `@org/utils` (tagged with `scope:shared`)
+- `@bas-e/utils` (tagged with `scope:shared`)
 
-Attempting to import from `@org/colors` or `@org/async` will result in a linting error due to module boundary constraints.
+Attempting to import from `@bas-e/colors` or `@bas-e/async` will result in a linting error due to module boundary constraints.

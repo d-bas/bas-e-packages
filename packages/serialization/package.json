@@ -1,10 +1,12 @@
 {
-  "name": "@bas-e/strings",
+  "name": "@bas-e/serialization",
   "version": "0.0.1",
+  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "gypfile": true,
   "exports": {
     "./package.json": "./package.json",
     ".": {
@@ -16,29 +18,21 @@
   },
   "files": [
     "dist",
-    "!**/*.tsbuildinfo"
+    "src",
+    "binding.gyp",
+    "build/Release/*.node"
   ],
-  "dependencies": {
-    "tslib": "^2.3.0"
+  "scripts": {
+    "build:native": "node-gyp rebuild",
+    "install": "node-gyp rebuild"
   },
-  "devDependencies": {
-    "vite": "^7.0.0",
-    "@bas-e/utils": "*"
+  "dependencies": {
+    "node-addon-api": "^7.1.0",
+    "tslib": "^2.3.0"
   },
   "nx": {
     "tags": [
-      "scope:strings"
-    ],
-    "targets": {
-      "build-base": {
-        "command": "echo 'Running build-base for strings. This can be replaced with arbitrary commands.'",
-        "cache": true
-      },
-      "build": {
-        "dependsOn": [
-          "build-base"
-        ]
-      }
-    }
+      "scope:shared"
+    ]
   }
 }

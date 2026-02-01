@@ -1,4 +1,4 @@
-# @org/utils
+# @bas-e/utils
 
 Shared utility functions used across all packages in the monorepo.
 
@@ -22,7 +22,7 @@ This package provides core utilities that are shared across all other packages:
 
 - Common helper functions
 - Shared types and interfaces
-- Base utilities used by `@org/strings`, `@org/async`, and `@org/colors`
+- Base utilities used by `@bas-e/strings`, `@bas-e/async`, and `@bas-e/colors`
 
 ## 📝 Usage
 
@@ -30,7 +30,7 @@ This package is automatically available to all other packages in the monorepo:
 
 ```typescript
 // In any other package (strings, async, colors)
-import { someUtility } from '@org/utils';
+import { someUtility } from '@bas-e/utils';
 
 // Use the shared functionality
 const result = someUtility(input);
