@@ -133,6 +133,14 @@ bool IsInstanceOf(const Napi::Env &env, const Napi::Object &obj,
   if (!ctorValue.IsFunction()) return false;
   return obj.InstanceOf(ctorValue.As<Napi::Function>());
 }
+std::string GetNapiErrorMessage(napi_env env) {
+  const napi_extended_error_info *info = nullptr;
+  napi_get_last_error_info(env, &info);
+  if (info && info->error_message) {
+    return info->error_message;
+  }
+  return "unknown napi error";
+}
 bool SeenContains(const SeenStack &seen, const Napi::Value &value) {
   for (const auto &ref : seen) {
     if (value.StrictEquals(ref.Value())) {
@@ -140,6 +148,12 @@ bool SeenContains(const SeenStack &seen, const Napi::Value &value) {
     }
   }
   return false;
+}
+bool IsBufferInstance(const Napi::Env &env, const Napi::Value &value) {
+  if (!value.IsObject()) {
+    return false;
+  }
+  return IsInstanceOf(env, value.As<Napi::Object>(), "Buffer");
 }
 std::string TypedArrayName(napi_typedarray_type type) {
   switch (type) {
@@ -241,18 +255,24 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
     }
     return out;
   }
-  if (value.IsBuffer()) {
-    Napi::Buffer<uint8_t> buf = value.As<Napi::Buffer<uint8_t>>();
-    std::string b64 = Base64Encode(buf.Data(), buf.Length());
-    return MakeWrapper(env, kTypeBuffer, Napi::String::New(env, b64));
-  }
   if (value.IsArrayBuffer()) {
     Napi::ArrayBuffer buf = value.As<Napi::ArrayBuffer>();
     std::string b64 = Base64Encode(static_cast<uint8_t *>(buf.Data()),
                                    buf.ByteLength());
     return MakeWrapper(env, kTypeArrayBuffer, Napi::String::New(env, b64));
   }
-  if (value.IsDataView()) {
+  if (IsBufferInstance(env, value)) {
+    Napi::Buffer<uint8_t> buf = value.As<Napi::Buffer<uint8_t>>();
+    std::string b64 = Base64Encode(buf.Data(), buf.Length());
+    return MakeWrapper(env, kTypeBuffer, Napi::String::New(env, b64));
+  }
+  bool isDataView = false;
+  napi_status isDataViewStatus = napi_is_dataview(env, value, &isDataView);
+  if (isDataViewStatus != napi_ok) {
+    std::string message = GetNapiErrorMessage(env);
+    throw Napi::TypeError::New(env, "napi_is_dataview failed: " + message);
+  }
+  if (isDataView) {
     size_t byteLength;
     void *data;
     napi_value arraybuffer;
@@ -261,7 +281,8 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
         napi_get_dataview_info(env, value, &byteLength, &data, &arraybuffer,
                                &byteOffset);
     if (status != napi_ok) {
-      throw Napi::TypeError::New(env, "Invalid DataView");
+      std::string message = GetNapiErrorMessage(env);
+      throw Napi::TypeError::New(env, "napi_get_dataview_info failed: " + message);
     }
     std::string b64 = Base64Encode(static_cast<uint8_t *>(data), byteLength);
     Napi::Object wrapper = MakeWrapper(env, kTypeDataView);
@@ -270,7 +291,13 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
     wrapper.Set(kLengthKey, Napi::Number::New(env, byteLength));
     return wrapper;
   }
-  if (value.IsTypedArray()) {
+  bool isTypedArray = false;
+  napi_status isTypedArrayStatus = napi_is_typedarray(env, value, &isTypedArray);
+  if (isTypedArrayStatus != napi_ok) {
+    std::string message = GetNapiErrorMessage(env);
+    throw Napi::TypeError::New(env, "napi_is_typedarray failed: " + message);
+  }
+  if (isTypedArray) {
     napi_typedarray_type type;
     size_t length;
     void *data;
@@ -280,7 +307,8 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
         napi_get_typedarray_info(env, value, &type, &length, &data,
                                  &arraybuffer, &byteOffset);
     if (status != napi_ok) {
-      throw Napi::TypeError::New(env, "Invalid typed array");
+      std::string message = GetNapiErrorMessage(env);
+      throw Napi::TypeError::New(env, "napi_get_typedarray_info failed: " + message);
     }
     std::string typeName = TypedArrayName(type);
     size_t bytesPerElement = TypedArrayBytesPerElement(type);
@@ -564,6 +592,55 @@ Napi::Value NativeParse(const Napi::CallbackInfo &info) {
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("stringify", Napi::Function::New(env, NativeStringify));
   exports.Set("parse", Napi::Function::New(env, NativeParse));
+  exports.Set("debugType", Napi::Function::New(env, [](const Napi::CallbackInfo &info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1) {
+      throw Napi::TypeError::New(env, "Expected a value to debug");
+    }
+    Napi::Value value = info[0];
+    Napi::Object out = Napi::Object::New(env);
+
+    bool isDataView = false;
+    napi_status dataViewStatus = napi_is_dataview(env, value, &isDataView);
+    out.Set("isDataViewStatus", Napi::Number::New(env, dataViewStatus));
+    out.Set("isDataView", Napi::Boolean::New(env, isDataView));
+    if (dataViewStatus != napi_ok) {
+      out.Set("isDataViewError", Napi::String::New(env, GetNapiErrorMessage(env)));
+    }
+
+    bool isTypedArray = false;
+    napi_status typedArrayStatus = napi_is_typedarray(env, value, &isTypedArray);
+    out.Set("isTypedArrayStatus", Napi::Number::New(env, typedArrayStatus));
+    out.Set("isTypedArray", Napi::Boolean::New(env, isTypedArray));
+    if (typedArrayStatus != napi_ok) {
+      out.Set("isTypedArrayError", Napi::String::New(env, GetNapiErrorMessage(env)));
+    }
+
+    bool isBuffer = false;
+    napi_status bufferStatus = napi_is_buffer(env, value, &isBuffer);
+    out.Set("isBufferStatus", Napi::Number::New(env, bufferStatus));
+    out.Set("isBuffer", Napi::Boolean::New(env, isBuffer));
+    if (bufferStatus != napi_ok) {
+      out.Set("isBufferError", Napi::String::New(env, GetNapiErrorMessage(env)));
+    }
+    bool isBufferInstance = false;
+    if (value.IsObject()) {
+      isBufferInstance = IsInstanceOf(env, value.As<Napi::Object>(), "Buffer");
+    }
+    out.Set("isBufferInstance", Napi::Boolean::New(env, isBufferInstance));
+
+    out.Set("isArrayBuffer", Napi::Boolean::New(env, value.IsArrayBuffer()));
+    out.Set("isTypedArrayNapi", Napi::Boolean::New(env, value.IsTypedArray()));
+    out.Set("isDataViewNapi", Napi::Boolean::New(env, value.IsDataView()));
+
+    Napi::Object global = env.Global();
+    Napi::Object obj = global.Get("Object").As<Napi::Object>();
+    Napi::Object proto = obj.Get("prototype").As<Napi::Object>();
+    Napi::Function toStringFn = proto.Get("toString").As<Napi::Function>();
+    Napi::Value tag = toStringFn.Call(value, {});
+    out.Set("objectTag", tag);
+    return out;
+  }));
   return exports;
 }
 }

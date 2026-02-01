@@ -1,18 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { stringify, parse } from '../src/index.js';
+import { stringify, parse, debugType } from '../src/index.js';
 
-function canUseNative(): boolean {
+function assertNativeAvailable(): void {
+  if (process.env.SKIP_NATIVE === '1') {
+    return;
+  }
   try {
     stringify(1);
-    return true;
-  } catch {
-    return false;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Native addon unavailable: ${message}`);
   }
 }
 
-const run = canUseNative() ? describe : describe.skip;
-
-run('serialization', () => {
+describe('serialization', () => {
+  assertNativeAvailable();
   it('roundtrips primitives and special numbers', () => {
     const input = {
       str: 'hello',
@@ -77,7 +79,6 @@ run('serialization', () => {
       buf: Buffer;
       arrayBuf: ArrayBuffer;
     };
-
     expect(Buffer.isBuffer(output.buf)).toBe(true);
     expect(output.buf.toString('utf8')).toBe('hello');
 
@@ -91,11 +92,22 @@ run('serialization', () => {
     const view = new DataView(viewBuffer);
     view.setUint8(0, 7);
     view.setUint8(1, 9);
-
-    const output = parse(stringify({ typed, view })) as {
-      typed: Uint16Array;
-      view: DataView;
-    };
+    let output: { typed: Uint16Array; view: DataView };
+    try {
+      output = parse(stringify({ typed, view })) as {
+        typed: Uint16Array;
+        view: DataView;
+      };
+    } catch (err) {
+      const typedInfo = debugType(typed);
+      const viewInfo = debugType(view);
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `TypedArray/DataView stringify failed: ${message}\n` +
+          `typedInfo=${JSON.stringify(typedInfo)}\n` +
+          `viewInfo=${JSON.stringify(viewInfo)}`
+      );
+    }
 
     expect(output.typed instanceof Uint16Array).toBe(true);
     expect(Array.from(output.typed.values())).toEqual([500, 1000]);

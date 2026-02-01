@@ -7,6 +7,7 @@ export type SerializedString = string;
 type NativeModule = {
   stringify: (value: unknown) => string;
   parse: (text: string) => unknown;
+  debugType: (value: unknown) => Record<string, unknown>;
 };
 
 const require = createRequire(import.meta.url);
@@ -37,4 +38,8 @@ export function stringify(value: unknown): SerializedString {
 
 export function parse(text: SerializedString): unknown {
   return loadNative().parse(text);
+}
+
+export function debugType(value: unknown): Record<string, unknown> {
+  return loadNative().debugType(value);
 }
