@@ -19,11 +19,21 @@ const char kTypeDate[] = "Date";
 const char kTypeRegExp[] = "RegExp";
 const char kTypeSet[] = "Set";
 const char kTypeMap[] = "Map";
+const char kTypeError[] = "Error";
+const char kTypePropKeyString[] = "PropKeyString";
+const char kTypePropKeySymbol[] = "PropKeySymbol";
 const char kTypeBuffer[] = "Buffer";
 const char kTypeArrayBuffer[] = "ArrayBuffer";
 const char kTypeTypedArray[] = "TypedArray";
 const char kTypeDataView[] = "DataView";
 const char kTypeHole[] = "Hole";
+const char kMessageKey[] = "message";
+const char kNameKey[] = "name";
+const char kStackKey[] = "stack";
+const char kKeyKey[] = "key";
+const char kDescriptionKey[] = "description";
+const char kGlobalKey[] = "global";
+const char kPropsKey[] = "props";
 const char kNumNaN[] = "NaN";
 const char kNumInf[] = "Infinity";
 const char kNumNegInf[] = "-Infinity";
@@ -60,6 +70,23 @@ Napi::Object MakeWrapper(Napi::Env env, const char *type, const Napi::Value &val
   Napi::Object obj = Napi::Object::New(env);
   obj.Set(kTypeKey, Napi::String::New(env, type));
   obj.Set(kValueKey, value);
+  return obj;
+}
+Napi::Object MakePropKeyString(Napi::Env env, const Napi::Value &value) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set(kTypeKey, Napi::String::New(env, kTypePropKeyString));
+  obj.Set(kValueKey, value);
+  return obj;
+}
+Napi::Object MakePropKeySymbol(Napi::Env env, bool isGlobal, const Napi::Value &keyOrDesc) {
+  Napi::Object obj = Napi::Object::New(env);
+  obj.Set(kTypeKey, Napi::String::New(env, kTypePropKeySymbol));
+  obj.Set(kGlobalKey, Napi::Boolean::New(env, isGlobal));
+  if (isGlobal) {
+    obj.Set(kKeyKey, keyOrDesc);
+  } else {
+    obj.Set(kDescriptionKey, keyOrDesc);
+  }
   return obj;
 }
 std::string Base64Encode(const uint8_t *data, size_t len) {
@@ -340,6 +367,60 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
     payload.Set(kFlagsKey, flags);
     return MakeWrapper(env, kTypeRegExp, payload);
   }
+  if (IsInstanceOf(env, obj, "Error")) {
+    Napi::Object payload = Napi::Object::New(env);
+    Napi::Value name = obj.Get(kNameKey);
+    Napi::Value message = obj.Get(kMessageKey);
+    Napi::Value stack = obj.Get(kStackKey);
+    payload.Set(kNameKey, name.IsUndefined() ? env.Undefined() : name.ToString());
+    payload.Set(kMessageKey,
+                message.IsUndefined() ? env.Undefined() : message.ToString());
+    payload.Set(kStackKey,
+                stack.IsUndefined() ? env.Undefined() : stack.ToString());
+    Napi::Array props = Napi::Array::New(env);
+    uint32_t idx = 0;
+    Napi::Array keys = obj.GetPropertyNames();
+    uint32_t length = keys.Length();
+    for (uint32_t i = 0; i < length; i++) {
+      Napi::Value key = keys.Get(i);
+      if (!key.IsString()) {
+        continue;
+      }
+      Napi::Array pair = Napi::Array::New(env, 2);
+      pair.Set(static_cast<uint32_t>(0), MakePropKeyString(env, key));
+      pair.Set(static_cast<uint32_t>(1), EncodeValue(env, obj.Get(key), seen));
+      props.Set(idx++, pair);
+    }
+    Napi::Object global = env.Global();
+    Napi::Object objectCtor = global.Get("Object").As<Napi::Object>();
+    Napi::Function getOwnPropertySymbols =
+        objectCtor.Get("getOwnPropertySymbols").As<Napi::Function>();
+    Napi::Array symbols =
+        getOwnPropertySymbols.Call(objectCtor, {obj}).As<Napi::Array>();
+    uint32_t symLength = symbols.Length();
+    Napi::Object symbolCtor = global.Get("Symbol").As<Napi::Object>();
+    Napi::Function keyForFn = symbolCtor.Get("keyFor").As<Napi::Function>();
+    for (uint32_t i = 0; i < symLength; i++) {
+      Napi::Value sym = symbols.Get(i);
+      if (!sym.IsSymbol()) {
+        continue;
+      }
+      Napi::Value keyFor = keyForFn.Call(symbolCtor, {sym});
+      bool isGlobal = !keyFor.IsUndefined() && !keyFor.IsNull();
+      Napi::Value descVal = env.Undefined();
+      if (!isGlobal) {
+        Napi::Object symObj = sym.ToObject();
+        descVal = symObj.Get(kDescriptionKey);
+      }
+      Napi::Array pair = Napi::Array::New(env, 2);
+      pair.Set(static_cast<uint32_t>(0),
+               MakePropKeySymbol(env, isGlobal, isGlobal ? keyFor : descVal));
+      pair.Set(static_cast<uint32_t>(1), EncodeValue(env, obj.Get(sym), seen));
+      props.Set(idx++, pair);
+    }
+    payload.Set(kPropsKey, props);
+    return MakeWrapper(env, kTypeError, payload);
+  }
   if (IsInstanceOf(env, obj, "Set")) {
     Napi::Function valuesFn = obj.Get("values").As<Napi::Function>();
     Napi::Object iterator = valuesFn.Call(obj, {}).As<Napi::Object>();
@@ -400,7 +481,8 @@ bool IsWrapperType(const Napi::Env &env, const Napi::Value &value,
 bool IsKnownWrapperType(const std::string &t) {
   return t == kTypeUndefined || t == kTypeHole || t == kTypeNumber ||
          t == kTypeBigInt || t == kTypeDate || t == kTypeRegExp || t == kTypeSet ||
-         t == kTypeMap || t == kTypeBuffer || t == kTypeArrayBuffer ||
+         t == kTypeMap || t == kTypeError || t == kTypePropKeyString ||
+         t == kTypePropKeySymbol || t == kTypeBuffer || t == kTypeArrayBuffer ||
          t == kTypeTypedArray || t == kTypeDataView;
 }
 Napi::Value DecodeValue(const Napi::Env &env, const Napi::Value &value,
@@ -436,6 +518,68 @@ Napi::Value DecodeWrapper(const Napi::Env &env, const Napi::Object &obj,
     Napi::Value source = payload.Get(kSourceKey);
     Napi::Value flags = payload.Get(kFlagsKey);
     return ctors.regexpCtor.New({source, flags});
+  }
+  if (t == kTypePropKeyString) {
+    Napi::Value value = obj.Get(kValueKey);
+    return value.IsUndefined() ? env.Undefined() : value.ToString();
+  }
+  if (t == kTypePropKeySymbol) {
+    Napi::Value globalVal = obj.Get(kGlobalKey);
+    bool isGlobal = globalVal.IsBoolean() && globalVal.ToBoolean().Value();
+    Napi::Object symbolCtor = env.Global().Get("Symbol").As<Napi::Object>();
+    if (isGlobal) {
+      Napi::Value keyVal = obj.Get(kKeyKey);
+      Napi::Function keyForFn = symbolCtor.Get("for").As<Napi::Function>();
+      return keyForFn.Call(symbolCtor, {keyVal});
+    }
+    Napi::Value descVal = obj.Get(kDescriptionKey);
+    Napi::Function symbolFn = symbolCtor.As<Napi::Function>();
+    return symbolFn.Call(env.Global(), {descVal});
+  }
+  if (t == kTypeError) {
+    Napi::Object payload = obj.Get(kValueKey).As<Napi::Object>();
+    Napi::Value nameVal = payload.Get(kNameKey);
+    Napi::Value messageVal = payload.Get(kMessageKey);
+    Napi::Value stackVal = payload.Get(kStackKey);
+
+    Napi::Function ctor = env.Global().Get("Error").As<Napi::Function>();
+    if (nameVal.IsString()) {
+      std::string name = nameVal.As<Napi::String>().Utf8Value();
+      Napi::Value candidate = env.Global().Get(name);
+      if (candidate.IsFunction()) {
+        ctor = candidate.As<Napi::Function>();
+      }
+    }
+
+    Napi::Value msgArg = messageVal.IsUndefined() ? env.Undefined() : messageVal;
+    Napi::Object errObj = ctor.New({msgArg}).As<Napi::Object>();
+    if (nameVal.IsString()) {
+      errObj.Set(kNameKey, nameVal);
+    }
+    if (stackVal.IsString()) {
+      errObj.Set(kStackKey, stackVal);
+    }
+    Napi::Value propsVal = payload.Get(kPropsKey);
+    if (propsVal.IsArray()) {
+      Napi::Array props = propsVal.As<Napi::Array>();
+      uint32_t length = props.Length();
+      for (uint32_t i = 0; i < length; i++) {
+        Napi::Value entryVal = props.Get(i);
+        if (!entryVal.IsArray()) {
+          continue;
+        }
+        Napi::Array pair = entryVal.As<Napi::Array>();
+        if (pair.Length() < 2) {
+          continue;
+        }
+        Napi::Value keyVal = DecodeValue(env, pair.Get(static_cast<uint32_t>(0)), ctors);
+        Napi::Value val = DecodeValue(env, pair.Get(static_cast<uint32_t>(1)), ctors);
+        if (keyVal.IsString() || keyVal.IsSymbol()) {
+          errObj.Set(keyVal, val);
+        }
+      }
+    }
+    return errObj;
   }
   if (t == kTypeSet) {
     Napi::Array arr = obj.Get(kValueKey).As<Napi::Array>();

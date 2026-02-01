@@ -140,4 +140,27 @@ describe('serialization', () => {
     expect(() => stringify(() => {})).toThrow(TypeError);
     expect(() => stringify(Symbol('x'))).toThrow(TypeError);
   });
+
+  it('roundtrips Error objects', () => {
+    const err = new TypeError('boom');
+    err.name = 'TypeError';
+    err.stack = 'STACK';
+    (err as any).code = 500;
+    (err as any).meta = { ok: true };
+    const sym = Symbol.for('errMeta');
+    (err as any)[sym] = 'sym-value';
+
+    const output = parse(stringify({ err })) as { err: Error };
+
+    expect(output.err instanceof Error).toBe(true);
+    expect(output.err.name).toBe('TypeError');
+    expect(output.err.message).toBe('boom');
+    expect(output.err.stack).toBe('STACK');
+    expect((output.err as any).code).toBe(500);
+    expect((output.err as any).meta).toEqual({ ok: true });
+    const outSymbols = Object.getOwnPropertySymbols(output.err);
+    const outSymbol = outSymbols.find((s) => Symbol.keyFor(s) === 'errMeta');
+    expect(outSymbol).toBeDefined();
+    expect((output.err as any)[outSymbol!]).toBe('sym-value');
+  });
 });
