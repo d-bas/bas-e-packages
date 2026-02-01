@@ -252,6 +252,24 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
                                    buf.ByteLength());
     return MakeWrapper(env, kTypeArrayBuffer, Napi::String::New(env, b64));
   }
+  if (value.IsDataView()) {
+    size_t byteLength;
+    void *data;
+    napi_value arraybuffer;
+    size_t byteOffset;
+    napi_status status =
+        napi_get_dataview_info(env, value, &byteLength, &data, &arraybuffer,
+                               &byteOffset);
+    if (status != napi_ok) {
+      throw Napi::TypeError::New(env, "Invalid DataView");
+    }
+    std::string b64 = Base64Encode(static_cast<uint8_t *>(data), byteLength);
+    Napi::Object wrapper = MakeWrapper(env, kTypeDataView);
+    wrapper.Set(kValueKey, Napi::String::New(env, b64));
+    wrapper.Set(kByteOffsetKey, Napi::Number::New(env, 0));
+    wrapper.Set(kLengthKey, Napi::Number::New(env, byteLength));
+    return wrapper;
+  }
   if (value.IsTypedArray()) {
     napi_typedarray_type type;
     size_t length;
@@ -279,24 +297,6 @@ Napi::Value EncodeValue(const Napi::Env &env, const Napi::Value &value,
     wrapper.Set(kValueKey, Napi::String::New(env, b64));
     wrapper.Set(kByteOffsetKey, Napi::Number::New(env, 0));
     wrapper.Set(kLengthKey, Napi::Number::New(env, length));
-    return wrapper;
-  }
-  if (value.IsDataView()) {
-    size_t byteLength;
-    void *data;
-    napi_value arraybuffer;
-    size_t byteOffset;
-    napi_status status =
-        napi_get_dataview_info(env, value, &byteLength, &data, &arraybuffer,
-                               &byteOffset);
-    if (status != napi_ok) {
-      throw Napi::TypeError::New(env, "Invalid DataView");
-    }
-    std::string b64 = Base64Encode(static_cast<uint8_t *>(data), byteLength);
-    Napi::Object wrapper = MakeWrapper(env, kTypeDataView);
-    wrapper.Set(kValueKey, Napi::String::New(env, b64));
-    wrapper.Set(kByteOffsetKey, Napi::Number::New(env, 0));
-    wrapper.Set(kLengthKey, Napi::Number::New(env, byteLength));
     return wrapper;
   }
   if (IsInstanceOf(env, obj, "Date")) {

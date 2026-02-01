@@ -9,7 +9,13 @@
       "options": {
         "configFile": "packages/serialization/vite.config.ts",
         "passWithNoTests": false
-      }
+      },
+      "dependsOn": [
+        "build"
+      ]
+    },
+    "build": {
+      "dependsOn": ["build-native"]
     },
     "build-native": {
       "executor": "nx:run-commands",
